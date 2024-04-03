@@ -5,7 +5,7 @@ setup(
     version='0.1.5',
     packages=['baresipy', 'baresipy.utils'],
     url='https://github.com/JarbasAl/baresipy',
-    install_requires=["ResponsiveVoice",
+    install_requires=["edge-tts",
                       "opentone>=0.1.2",
                       "pydub",
                       "pexpect"],
