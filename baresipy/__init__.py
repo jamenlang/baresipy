@@ -1,72 +1,42 @@
 from time import sleep
 import pexpect
+from os.path import join, expanduser
 from opentone import ToneGenerator
 from responsive_voice import ResponsiveVoice
 from pydub import AudioSegment
 import tempfile
 import logging
 import subprocess
+import re
 from threading import Thread
 from baresipy.utils import create_daemon
 from baresipy.utils.log import LOG
-import baresipy.config
-from os.path import expanduser, join, isfile, isdir
-from os import makedirs
-import signal
-import re
 
 logging.getLogger("urllib3.connectionpool").setLevel("WARN")
 logging.getLogger("pydub.converter").setLevel("WARN")
 
 
+def extract_digit(input_string):
+    match = re.search(r"'(\d+)'", input_string)
+    if match:
+        return int(match.group(1))
+    else:
+        return None
+
 class BareSIP(Thread):
-    def __init__(self, user, pwd, gateway, tts=None, debug=False,
-                 block=True, config_path=None, sounds_path=None):
-        config_path = config_path or join("~", ".baresipy")
-        self.config_path = expanduser(config_path)
-        if not isdir(self.config_path):
-            makedirs(self.config_path)
-        if isfile(join(self.config_path, "config")):
-            with open(join(self.config_path, "config"), "r") as f:
-                self.config = f.read()
-            LOG.info("config loaded from " + self.config_path + "/config")
-            self.updated_config = False
-        else:
-            self.config = baresipy.config.DEFAULT
-            self.updated_config = True
-
-        self._original_config = str(self.config)
-
-        if sounds_path is not None and "#audio_path" in self.config:
-            self.updated_config = True
-            if sounds_path is False:
-                # sounds disabled
-                self.config = self.config.replace(
-                    "#audio_path		/usr/share/baresip",
-                    "audio_path		/dont/load")
-            elif isdir(sounds_path):
-                self.config = self.config.replace(
-                    "#audio_path		/usr/share/baresip",
-                    "audio_path		" + sounds_path)
-
-        if self.updated_config:
-            with open(join(self.config_path, "config.bak"), "w") as f:
-                f.write(self._original_config)
-
-            LOG.info("saving config")
-            with open(join(self.config_path, "config"), "w") as f:
-                f.write(self.config)
-
+    def __init__(self, user, auth_user, pwd, gateway, tts=None, debug=False, block=True):
         self.debug = debug
         self.user = user
+        self.auth_user = auth_user
         self.pwd = pwd
         self.gateway = gateway
         if tts:
             self.tts = tts
         else:
             self.tts = ResponsiveVoice(gender=ResponsiveVoice.MALE)
-        self._login = "sip:{u}@{g};auth_pass={p}".format(u=self.user, p=self.pwd,
-                                               g=self.gateway)
+        self._login = "sip:{u}@{g};auth_user={a};auth_pass={p}".format(u=self.user, g=self.gateway,
+                                               a=self.auth_user,
+                                               p=self.pwd)
         self._prev_output = ""
         self.running = False
         self.ready = False
@@ -76,7 +46,7 @@ class BareSIP(Thread):
         self._call_status = None
         self.audio = None
         self._ts = None
-        self.baresip = pexpect.spawn('baresip -f ' + self.config_path)
+        self.baresip = pexpect.spawn('baresip')
         super().__init__()
         self.start()
         if block:
@@ -166,10 +136,6 @@ class BareSIP(Thread):
         return self.call_status
 
     def quit(self):
-        if self.updated_config:
-            LOG.info("restoring original config")
-            with open(join(self.config_path, "config"), "w") as f:
-                f.write(self._original_config)
         LOG.info("Exiting")
         if self.running:
             if self.current_call:
@@ -179,8 +145,6 @@ class BareSIP(Thread):
         self.current_call = None
         self._call_status = None
         self.abort = True
-        self.baresip.close()
-        self.baresip.kill(signal.SIGKILL)
 
     def send_dtmf(self, number):
         number = str(number)
@@ -208,6 +172,7 @@ class BareSIP(Thread):
         wav_file, duration = self.convert_audio(wav_file)
         # send audio stream
         LOG.info("transmitting audio")
+
         self.do_command("/ausrc aufile," + wav_file)
         # wait till playback ends
         sleep(duration - 0.5)
@@ -217,16 +182,27 @@ class BareSIP(Thread):
     @staticmethod
     def convert_audio(input_file, outfile=None):
         input_file = expanduser(input_file)
-        sound = AudioSegment.from_file(input_file)
-        sound += AudioSegment.silent(duration=500)
-        # ensure minimum time
-        # workaround baresip bug
-        while sound.duration_seconds < 3:
+        try:
+            sound = AudioSegment.from_file(input_file)
             sound += AudioSegment.silent(duration=500)
+            # ensure minimum time
+            # workaround baresip bug
+            while sound.duration_seconds < 3:
+                sound += AudioSegment.silent(duration=500)
+        except:
+            LOG.error("audio file might be too short to convert.")
+            input_file = "/usr/share/baresip/error.wav"
+
+            sound = AudioSegment.from_file(input_file)
+            sound += AudioSegment.silent(duration=500)
+            # ensure minimum time
+            # workaround baresip bug
+            while sound.duration_seconds < 3:
+                sound += AudioSegment.silent(duration=500)
 
         outfile = outfile or join(tempfile.gettempdir(), "pybaresip.wav")
         sound = sound.set_frame_rate(48000)
-        sound = sound.set_channels(2)
+        sound = sound.set_channels(1)
         sound.export(outfile, format="wav")
         return outfile, sound.duration_seconds
 
@@ -317,20 +293,15 @@ class BareSIP(Thread):
         LOG.debug("Aborting call, maybe we reached voicemail?")
         self.hang()
 
-    def handle_dtmf_received(self, char, duration):
-        LOG.info("Received DTMF symbol '{0}' duration={1}".format(char, duration))
-
     def handle_error(self, error):
         LOG.error(error)
         if error == "failed to set audio-source (No such device)":
             self.handle_audio_stream_failure()
-            
-    def handle_unhandled_output(self, output):
-        LOG.info("Received unhandled output: '{0}'".format(output))
 
     # event loop
     def run(self):
         self.running = True
+        self.dtmf = False
         while self.running:
             try:
                 out = self.baresip.readline().decode("utf-8")
@@ -399,9 +370,17 @@ class BareSIP(Thread):
                     elif "call un-muted" in out:
                         self.mic_muted = False
                         self.handle_mic_unmuted()
+                    elif "received event: " in out:
+                        LOG.error("DTMF!!")
+                        dtmf = out.split("received event:")[1].strip()
+                        digit = extract_digit(out)
+                        self.dtmf = True
+                        self.dtmf_digit = digit
+                        LOG.error(digit)
                     elif "session closed:" in out:
                         reason = out.split("session closed:")[1].strip()
                         status = "DISCONNECTED"
+                        self.running = False
                         self.handle_call_status(status)
                         self._call_status = status
                         self.handle_call_ended(reason)
@@ -425,30 +404,17 @@ class BareSIP(Thread):
                     elif "failed to set audio-source (No such device)" in out:
                         error = "failed to set audio-source (No such device)"
                         self.handle_error(error)
-                    elif "terminated by signal" in out or "ua: stop all" in \
-                            out:
-                        self.running = False
-                    elif "received DTMF:" in out:
-                        match = re.search('received DTMF: \'(.)\' \(duration=(\d+)\)', out)
-                        if match:
-                            self.handle_dtmf_received(match.group(1), int(match.group(2)))
-                    else:
-                        self.handle_unhandled_output(out)
+
                     self._prev_output = out
             except pexpect.exceptions.EOF:
                 # baresip exited
-                self.running = False
+                self.quit()
             except pexpect.exceptions.TIMEOUT:
                 # nothing happened for a while
                 pass
-            except KeyboardInterrupt:
-                self.running = False
-
-        self.quit()
 
     def wait_until_ready(self):
         while not self.ready:
             sleep(0.1)
             if self.abort:
                 return
-
