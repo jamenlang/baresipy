@@ -1,4 +1,4 @@
-ResponsiveVoice
+edge-tts
 opentone>=0.1.2
 pydub
 pexpect
