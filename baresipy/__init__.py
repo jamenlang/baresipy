@@ -24,7 +24,7 @@ def extract_digit(input_string):
         return None
 
 class BareSIP(Thread):
-    def __init__(self, user, auth_user, pwd, gateway, tts=None, debug=False, block=True):
+    def __init__(self, user, pwd, gateway, auth_user=None, tts=None, debug=False, block=True):
         self.debug = debug
         self.user = user
         self.auth_user = auth_user
@@ -34,9 +34,12 @@ class BareSIP(Thread):
             self.tts = tts
         else:
             self.tts = ResponsiveVoice(gender=ResponsiveVoice.MALE)
-        self._login = "sip:{u}@{g};auth_user={a};auth_pass={p}".format(u=self.user, g=self.gateway,
-                                               a=self.auth_user,
-                                               p=self.pwd)
+
+        if auth_user:
+            self._login = "sip:{u}@{g};auth_user={a};auth_pass={p}".format(u=self.user, g=self.gateway, a=self.auth_user, p=self.pwd)
+        else:
+            self._login = "sip:{u}@{g};auth_pass={p}".format(u=self.user, g=self.gateway, p=self.pwd)
+            
         self._prev_output = ""
         self.running = False
         self.ready = False
