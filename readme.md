@@ -2,6 +2,9 @@
 
 A python wrapper around [baresip](https://github.com/alfredh/baresip)
 
+NOTE: changes made to this repository are specifically for baresip v0.6.1 - which is still installed through apt on Raspbian.
+newer features such as DTMF have been implemented in the jarbas master, but they may not be compatible with 0.6.1
+
 Make voip calls/bots from python!
 
 ![](./logo.png)
