@@ -12,7 +12,7 @@ auth_pswd = "testpassword"
 debug = False
 
 
-b = BareSIP(user, auth_user, auth_pswd, gateway, debug=debug)
+b = BareSIP(user, auth_pswd, gateway, auth_user, debug=debug)
 
 while b.running:
 
